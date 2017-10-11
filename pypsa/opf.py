@@ -622,7 +622,9 @@ def define_passive_branch_flows(network,snapshots,formulation="angles",ptdf_tole
         define_passive_branch_flows_with_cycles(network,snapshots)
     elif formulation == "kirchhoff":
         define_passive_branch_flows_with_kirchhoff(network,snapshots)
-
+    else:
+        logging.error("formulation ", formulation, " not available")
+        raise NotImplementedError
 
 
 def define_passive_branch_flows_with_angles(network,snapshots):
