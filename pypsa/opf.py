@@ -1229,7 +1229,30 @@ def extract_optimisation_results(network, snapshots, formulation="angles"):
             network.generators_t.status.loc[snapshots,fixed_committable_gens_i] = \
                 as_series(model.generator_status).unstack(0)
 
+def define_constraints( network, snapshots, formulation, ptdf_tolerance):
 
+    define_generator_variables_constraints(network,snapshots)
+
+    define_storage_variables_constraints(network,snapshots)
+
+    define_store_variables_constraints(network,snapshots)
+
+    define_branch_extension_variables(network,snapshots)
+
+    define_link_flows(network,snapshots)
+
+    define_nodal_balances(network,snapshots)
+
+    define_passive_branch_flows(network,snapshots,formulation,ptdf_tolerance)
+
+    define_passive_branch_constraints(network,snapshots)
+
+    if formulation in ["angles", "kirchhoff"]:
+        define_nodal_balance_constraints(network,snapshots)
+    elif formulation in ["ptdf", "cycles"]:
+        define_sub_network_balance_constraints(network,snapshots)
+
+    define_global_constraints(network,snapshots)
 
 def network_lopf(network, snapshots=None, solver_name="glpk", solver_io=None,
                  skip_pre=False, extra_functionality=None, solver_options={},
@@ -1292,30 +1315,9 @@ def network_lopf(network, snapshots=None, solver_name="glpk", solver_io=None,
     logger.info("Building pyomo model using `%s` formulation", formulation)
     network.model = ConcreteModel("Linear Optimal Power Flow")
 
-
-    define_generator_variables_constraints(network,snapshots)
-
-    define_storage_variables_constraints(network,snapshots)
-
-    define_store_variables_constraints(network,snapshots)
-
-    define_branch_extension_variables(network,snapshots)
-
-    define_link_flows(network,snapshots)
-
-    define_nodal_balances(network,snapshots)
-
-    define_passive_branch_flows(network,snapshots,formulation,ptdf_tolerance)
-
-    define_passive_branch_constraints(network,snapshots)
-
-    if formulation in ["angles", "kirchhoff"]:
-        define_nodal_balance_constraints(network,snapshots)
-    elif formulation in ["ptdf", "cycles"]:
-        define_sub_network_balance_constraints(network,snapshots)
-
-    define_global_constraints(network,snapshots)
-
+    define_constraints(network, snapshots,
+                       formulation = formulation,
+                       ptdf_tolerance = ptdf_tolerance   )
     define_linear_objective(network, snapshots)
 
     #force solver to also give us the dual prices
