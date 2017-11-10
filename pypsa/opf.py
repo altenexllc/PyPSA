@@ -879,7 +879,6 @@ def define_nodal_balances(network,snapshots):
             network._p_balance[bus0,sn].variables.append((-1,network.model.link_p[cb,sn]))
             network._p_balance[bus1,sn].variables.append((efficiency.at[sn,cb],network.model.link_p[cb,sn]))
 
-
     for gen in network.generators.index:
         bus = network.generators.at[gen,"bus"]
         sign = network.generators.at[gen,"sign"]
@@ -921,7 +920,7 @@ def define_nodal_balance_constraints(network,snapshots):
             network._p_balance[bus0,sn].variables.append((-1,network.model.passive_branch_p[bt,bn,sn]))
             network._p_balance[bus1,sn].variables.append((1,network.model.passive_branch_p[bt,bn,sn]))
 
-    power_balance = {k: LConstraint(v,"==",LExpression()) for k,v in iteritems(network._p_balance)}
+    power_balance = {k: LConstraint(v,">=",LExpression()) for k,v in iteritems(network._p_balance)}
 
     l_constraint(network.model, "power_balance", power_balance,
                  list(network.buses.index), snapshots)
@@ -1203,56 +1202,57 @@ def extract_optimisation_results(network, snapshots, formulation="angles"):
 
     network.generators.p_nom_opt = network.generators.p_nom
 
-    network.generators.loc[network.generators.p_nom_extendable, 'p_nom_opt'] = \
-        as_series(network.model.generator_p_nom)
 
-    network.storage_units.p_nom_opt = network.storage_units.p_nom
+    # network.generators.loc[network.generators.p_nom_extendable, 'p_nom_opt'] = \
+    #     as_series(network.model.generator_p_nom)
 
-    network.storage_units.loc[network.storage_units.p_nom_extendable, 'p_nom_opt'] = \
-        as_series(network.model.storage_p_nom)
+    # network.storage_units.p_nom_opt = network.storage_units.p_nom
 
-    network.stores.e_nom_opt = network.stores.e_nom
+    # network.storage_units.loc[network.storage_units.p_nom_extendable, 'p_nom_opt'] = \
+    #     as_series(network.model.storage_p_nom)
 
-    network.stores.loc[network.stores.e_nom_extendable, 'e_nom_opt'] = \
-        as_series(network.model.store_e_nom)
+    # network.stores.e_nom_opt = network.stores.e_nom
+
+    # network.stores.loc[network.stores.e_nom_extendable, 'e_nom_opt'] = \
+    #     as_series(network.model.store_e_nom)
 
 
-    s_nom_extendable_passive_branches = as_series(model.passive_branch_s_nom)
-    for c in network.iterate_components(passive_branch_components):
-        c.df['s_nom_opt'] = c.df.s_nom
-        if c.df.s_nom_extendable.any():
-            c.df.loc[c.df.s_nom_extendable, 's_nom_opt'] = s_nom_extendable_passive_branches.loc[c.name]
+    # s_nom_extendable_passive_branches = as_series(model.passive_branch_s_nom)
+    # for c in network.iterate_components(passive_branch_components):
+    #     c.df['s_nom_opt'] = c.df.s_nom
+    #     if c.df.s_nom_extendable.any():
+    #         c.df.loc[c.df.s_nom_extendable, 's_nom_opt'] = s_nom_extendable_passive_branches.loc[c.name]
 
-    network.links.p_nom_opt = network.links.p_nom
+    # network.links.p_nom_opt = network.links.p_nom
 
-    network.links.loc[network.links.p_nom_extendable, "p_nom_opt"] = \
-        as_series(network.model.link_p_nom)
+    # network.links.loc[network.links.p_nom_extendable, "p_nom_opt"] = \
+    #     as_series(network.model.link_p_nom)
 
-    try:
-        network.global_constraints.loc[:,"mu"] = -pd.Series(list(model.global_constraints.values()),
-                                                            index=list(model.global_constraints.keys())).map(duals)
-    except (AttributeError, KeyError) as e:
-        logger.warning("Could not read out global constraint shadow prices")
+    # try:
+    #     network.global_constraints.loc[:,"mu"] = -pd.Series(list(model.global_constraints.values()),
+    #                                                         index=list(model.global_constraints.keys())).map(duals)
+    # except (AttributeError, KeyError) as e:
+    #     logger.warning("Could not read out global constraint shadow prices")
 
-    #extract unit commitment statuses
-    if network.generators.committable.any():
-        allocate_series_dataframes(network, {'Generator': ['status']})
+    # #extract unit commitment statuses
+    # if network.generators.committable.any():
+    #     allocate_series_dataframes(network, {'Generator': ['status']})
 
-        fixed_committable_gens_i = network.generators.index[~network.generators.p_nom_extendable & network.generators.committable]
+    #     fixed_committable_gens_i = network.generators.index[~network.generators.p_nom_extendable & network.generators.committable]
 
-        if len(fixed_committable_gens_i) > 0:
-            network.generators_t.status.loc[snapshots,fixed_committable_gens_i] = \
-                as_series(model.generator_status).unstack(0)
+    #     if len(fixed_committable_gens_i) > 0:
+    #         network.generators_t.status.loc[snapshots,fixed_committable_gens_i] = \
+    #             as_series(model.generator_status).unstack(0)
 
 def define_constraints( network, snapshots, formulation, ptdf_tolerance):
 
     define_generator_variables_constraints(network,snapshots)
 
-    define_storage_variables_constraints(network,snapshots)
+    #define_storage_variables_constraints(network,snapshots)
 
-    define_store_variables_constraints(network,snapshots)
+#    define_store_variables_constraints(network,snapshots)
 
-    define_branch_extension_variables(network,snapshots)
+#    define_branch_extension_variables(network,snapshots)
 
     define_link_flows(network,snapshots)
 
