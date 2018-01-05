@@ -56,6 +56,9 @@ def my_f(network,snapshots):
     print(snapshots)
 
 
+network.set_snapshots(range(10000))
+
+
 network.lopf(extra_functionality=my_f)
 
 #Cheap generator 1 cannot be fully dispatched because of network constraints,
@@ -78,4 +81,3 @@ print(network.buses_t.v_mag_pu)
 #it from expensive generator 0, also some dispatch from cheap generator 1 has to be substituted from generator0
 #to avoid overloading line 1.
 print(network.buses_t.marginal_price)
-
