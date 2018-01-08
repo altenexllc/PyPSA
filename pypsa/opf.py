@@ -87,16 +87,9 @@ def define_generator_variables_constraints(network,snapshots):
     p_min_pu = get_switchable_as_dense(network, 'Generator', 'p_min_pu', snapshots)
     p_max_pu = get_switchable_as_dense(network, 'Generator', 'p_max_pu', snapshots)
 
-    def gen_p_bounds_f(model,gen_name,snapshot):
-        return gen_p_bounds[gen_name,snapshot]
-
-    def gen_p_nom_bounds(model, gen_name):
-        return (network.generators.at[gen_name,"p_nom_min"],
-                network.generators.at[gen_name,"p_nom_max"])
-
-
     ## Define generator dispatch variables ##
-    gen_p_disp_snapshots = itertools.product( extendable_gens_i | fixed_committable_gens_i, snapshots)
+#    gen_p_disp_snapshots = itertools.product( extendable_gens_i | fixed_committable_gens_i, snapshots)
+    gen_p_disp_snapshots = itertools.product( network.generators.index, snapshots)
     gen_p_bounds = dict.fromkeys( gen_p_disp_snapshots, (None, None))
 
     ## Define generator dispatch constraints for extendable generators ##
@@ -119,16 +112,16 @@ def define_generator_variables_constraints(network,snapshots):
     up_time_gens = fixed_committable_gens_i  [network.generators.loc[fixed_committable_gens_i,"min_up_time"] > 0]
     down_time_gens = fixed_committable_gens_i[network.generators.loc[fixed_committable_gens_i,"min_down_time"] > 0]
 
-
     ## Deal with start up costs ##
     suc_gens = fixed_committable_gens_i[network.generators.loc[fixed_committable_gens_i,"start_up_cost"] > 0]
     network.model.generator_start_up_cost = Var(list(suc_gens),snapshots,
                                                 domain=NonNegativeReals)
-
+    sucs = {}
     ## Deal with shut down costs ##
     sdc_gens = fixed_committable_gens_i[network.generators.loc[fixed_committable_gens_i,"shut_down_cost"] > 0]
     network.model.generator_shut_down_cost = Var(list(sdc_gens),snapshots,
                                                 domain=NonNegativeReals)
+    sdcs = {}
 
     ## Deal with ramp limits without unit commitment ##
 
@@ -139,6 +132,29 @@ def define_generator_variables_constraints(network,snapshots):
     ## ramp down
     rd_gens = network.generators.index[network.generators.ramp_limit_down.notnull()]
     rd = {}
+
+    def gen_p_bounds_f(model, gen_name, snapshot):
+        return gen_p_bounds[gen_name,snapshot]
+
+    def gen_p_nom_bounds(model, gen_name):
+        return (network.generators.at[gen_name,"p_nom_min"],
+                network.generators.at[gen_name,"p_nom_max"])
+
+    ## Define committable generator statuses ##
+    network.model.generator_status = Var(list(fixed_committable_gens_i), snapshots,
+                                         within=Binary)
+    network.model.generator_p = Var(list(network.generators.index), snapshots,
+                                        domain=Reals, bounds=gen_p_bounds_f)
+
+    free_pyomo_initializers(network.model.generator_p)
+
+    ## Define generator capacity variables if generator is extendable ##
+
+    network.model.generator_p_nom = Var(list(extendable_gens_i),
+                                        domain=NonNegativeReals, bounds=gen_p_nom_bounds)
+    free_pyomo_initializers(network.model.generator_p_nom)
+
+
 
     for i_sn,sn in enumerate(snapshots):
         for gen in fixed_gens_i:
@@ -166,7 +182,12 @@ def define_generator_variables_constraints(network,snapshots):
                                                                          (-1.,network.model.generator_p[gen,sn])]),">=")
 
 
-        sucs = {}
+
+        # skip these constraints on first snapshot
+        try:
+            sn_prev = snapshots[ i_sn - 1]
+        except IndexError:
+            sn_prev = None
 
         for gen in suc_gens:
             suc = network.generators.loc[gen,"start_up_cost"]
@@ -175,13 +196,11 @@ def define_generator_variables_constraints(network,snapshots):
             if i_sn == 0:
                 rhs = LExpression([(suc, network.model.generator_status[gen,sn])],-suc*initial_status)
             else:
-                rhs = LExpression([(suc, network.model.generator_status[gen,sn]),(-suc,network.model.generator_status[gen,snapshots[i-1]])])
+                rhs = LExpression([(suc, network.model.generator_status[gen,sn]),(-suc,network.model.generator_status[gen, sn_prev])])
 
             lhs = LExpression([(1,network.model.generator_start_up_cost[gen,sn])])
             sucs[gen,sn] = LConstraint(lhs,">=",rhs)
 
-
-        sdcs = {}
         for gen in sdc_gens:
             sdc = network.generators.loc[gen,"shut_down_cost"]
             initial_status = network.generators.loc[gen,"initial_status"]
@@ -189,15 +208,17 @@ def define_generator_variables_constraints(network,snapshots):
             if i_sn == 0:
                 rhs = LExpression([(-sdc, network.model.generator_status[gen,sn])],sdc*initial_status)
             else:
-                rhs = LExpression([(-sdc, network.model.generator_status[gen,sn]),(sdc,network.model.generator_status[gen,snapshots[i-1]])])
+                rhs = LExpression([(-sdc, network.model.generator_status[gen,sn]),(sdc,network.model.generator_status[gen, sn_prev])])
 
             lhs = LExpression([(1,network.model.generator_shut_down_cost[gen,sn])])
             sdcs[gen,sn] = LConstraint(lhs,">=",rhs)
 
-
-        # skip these constraints on first pass
-        if ( i_sn > 0):
-            sn_prev = snapshots[ i_sn - 1]
+        if sn_prev is None:
+            for gen in ru_gens:
+                ru[gen, sn] = LConstraint()
+            for gen in rd_gens:
+                rd[gen, sn] = LConstraint()
+        else:
             for gen in ru_gens:
                 if network.generators.at[gen, "p_nom_extendable"]:
                     lhs = LExpression([(1, network.model.generator_p[gen,sn]),
@@ -239,23 +260,10 @@ def define_generator_variables_constraints(network,snapshots):
 
                 rd[gen,sn] = LConstraint(lhs,">=")
 
+
     l_constraint(network.model, "ramp_down", rd, list(rd_gens), snapshots[1:])
-
-
-
-
-
     l_constraint(network.model, "ramp_up", ru, list(ru_gens), snapshots[1:])
 
-    network.model.generator_p = Var(list(network.generators.index), snapshots,
-                                        domain=Reals, bounds=gen_p_bounds_f)
-    free_pyomo_initializers(network.model.generator_p)
-
-    ## Define generator capacity variables if generator is extendable ##
-
-    network.model.generator_p_nom = Var(list(extendable_gens_i),
-                                        domain=NonNegativeReals, bounds=gen_p_nom_bounds)
-    free_pyomo_initializers(network.model.generator_p_nom)
 
     l_constraint(network.model, "generator_p_lower", gen_p_lower,
                  list(extendable_gens_i), snapshots)
@@ -263,14 +271,8 @@ def define_generator_variables_constraints(network,snapshots):
     l_constraint(network.model, "generator_p_upper", gen_p_upper,
                  list(extendable_gens_i), snapshots)
 
-    ## Define committable generator statuses ##
-
-    network.model.generator_status = Var(list(fixed_committable_gens_i), snapshots,
-                                         within=Binary)
-
     l_constraint(network.model, "committable_gen_p_lower", committable_gen_p_lower,
                  list(fixed_committable_gens_i), snapshots)
-
 
     l_constraint(network.model, "committable_gen_p_upper", committable_gen_p_upper,
                  list(fixed_committable_gens_i), snapshots)
@@ -323,18 +325,6 @@ def define_generator_variables_constraints(network,snapshots):
 
         l_constraint(network.model, "gen_down_time_{}".format(gen_i), gen_down_time,
                      range(blocks))
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def define_storage_variables_constraints(network,snapshots):
