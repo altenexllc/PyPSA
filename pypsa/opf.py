@@ -34,6 +34,7 @@ from scipy.sparse.linalg import spsolve
 from pyomo.environ import (ConcreteModel, Var, Objective,
                            NonNegativeReals, Constraint, Reals,
                            Suffix, Expression, Binary, SolverFactory)
+import itertools
 
 try:
     from pyomo.solvers.plugins.solvers.persistent_solver import PersistentSolver
@@ -86,77 +87,88 @@ def define_generator_variables_constraints(network,snapshots):
     p_min_pu = get_switchable_as_dense(network, 'Generator', 'p_min_pu', snapshots)
     p_max_pu = get_switchable_as_dense(network, 'Generator', 'p_max_pu', snapshots)
 
-    ## Define generator dispatch variables ##
-
-    gen_p_bounds = {(gen,sn) : (None,None)
-                    for gen in extendable_gens_i | fixed_committable_gens_i
-                    for sn in snapshots}
-
-    if len(fixed_gens_i):
-        var_lower = p_min_pu.loc[:,fixed_gens_i].multiply(network.generators.loc[fixed_gens_i, 'p_nom'])
-        var_upper = p_max_pu.loc[:,fixed_gens_i].multiply(network.generators.loc[fixed_gens_i, 'p_nom'])
-
-        gen_p_bounds.update({(gen,sn) : (var_lower[gen][sn],var_upper[gen][sn])
-                             for gen in fixed_gens_i
-                             for sn in snapshots})
-
     def gen_p_bounds_f(model,gen_name,snapshot):
         return gen_p_bounds[gen_name,snapshot]
-
-    network.model.generator_p = Var(list(network.generators.index), snapshots,
-                                    domain=Reals, bounds=gen_p_bounds_f)
-    free_pyomo_initializers(network.model.generator_p)
-
-    ## Define generator capacity variables if generator is extendable ##
 
     def gen_p_nom_bounds(model, gen_name):
         return (network.generators.at[gen_name,"p_nom_min"],
                 network.generators.at[gen_name,"p_nom_max"])
 
+
+    ## Define generator dispatch variables ##
+    gen_p_disp_snapshots = itertools.product( extendable_gens_i | fixed_committable_gens_i, snapshots)
+    gen_p_bounds = dict.fromkeys( gen_p_disp_snapshots, (None, None))
+
+    ## Define generator dispatch constraints for extendable generators ##
+    gen_p_ext_snapshots = itertools.product( extendable_gens_i, snapshots)
+    gen_p_lower = dict.fromkeys( gen_p_ext_snapshots, ( None, "", None))
+    gen_p_upper = dict.fromkeys( gen_p_ext_snapshots, ( None, "", None))
+
+    gen_p_var_lower = p_min_pu.loc[:,fixed_gens_i].multiply(network.generators.loc[fixed_gens_i, 'p_nom'])
+    gen_p_var_upper = p_max_pu.loc[:,fixed_gens_i].multiply(network.generators.loc[fixed_gens_i, 'p_nom'])
+
+    ## Define generator dispatch constraints for committable generators ##
+    gen_p_comm_snapshots = itertools.product( fixed_committable_gens_i, snapshots)
+    committable_gen_p_lower = dict.fromkeys( gen_p_comm_snapshots, (None, ""))
+    committable_gen_p_upper = dict.fromkeys( gen_p_comm_snapshots, (None, ""))
+
+    gen_committable_var_lower = p_min_pu.loc[:,fixed_committable_gens_i].multiply(network.generators.loc[fixed_committable_gens_i, 'p_nom'])
+    gen_committable_var_upper = p_max_pu.loc[:,fixed_committable_gens_i].multiply(network.generators.loc[fixed_committable_gens_i, 'p_nom'])
+
+    for sn in snapshots:
+        for gen in fixed_gens_i:
+            gen_p_bounds[ gen, sn] = (gen_p_var_lower[gen][sn], gen_p_var_upper[gen][sn])
+
+        for gen in extendable_gens_i:
+            gen_p_lower[ gen, sn] = [[(1,
+                             network.model.generator_p[gen,sn]),
+                             (-p_min_pu.at[sn, gen],
+                              network.model.generator_p_nom[gen])],">=",0.]
+
+            gen_p_upper[ gen, sn] = [[(1,
+                                       network.model.generator_p[gen,sn]),
+                                      (-p_max_pu.at[sn, gen],
+                                       network.model.generator_p_nom[gen])],"<=",0.]
+
+
+        for gen in fixed_committable_gens_i:
+            committable_gen_p_lower[gen,sn] = LConstraint( LExpression( [(gen_committable_var_lower[gen][sn],
+                                                                          network.model.generator_status[gen,sn]),
+                                                                         (-1.,network.model.generator_p[gen,sn])]),"<=")
+
+            committable_gen_p_upper[gen,sn] = LConstraint( LExpression( [(gen_committable_var_upper[gen][sn],
+                                                                          network.model.generator_status[gen,sn]),
+                                                                         (-1.,network.model.generator_p[gen,sn])]),">=")
+
+
+    network.model.generator_p = Var(list(network.generators.index), snapshots,
+                                        domain=Reals, bounds=gen_p_bounds_f)
+    free_pyomo_initializers(network.model.generator_p)
+
+    ## Define generator capacity variables if generator is extendable ##
+
     network.model.generator_p_nom = Var(list(extendable_gens_i),
                                         domain=NonNegativeReals, bounds=gen_p_nom_bounds)
     free_pyomo_initializers(network.model.generator_p_nom)
 
-
-    ## Define generator dispatch constraints for extendable generators ##
-
-    gen_p_lower = {(gen,sn) :
-                   [[(1,network.model.generator_p[gen,sn]),
-                     (-p_min_pu.at[sn, gen],
-                      network.model.generator_p_nom[gen])],">=",0.]
-                   for gen in extendable_gens_i for sn in snapshots}
     l_constraint(network.model, "generator_p_lower", gen_p_lower,
                  list(extendable_gens_i), snapshots)
 
-    gen_p_upper = {(gen,sn) :
-                   [[(1,network.model.generator_p[gen,sn]),
-                     (-p_max_pu.at[sn, gen],
-                      network.model.generator_p_nom[gen])],"<=",0.]
-                   for gen in extendable_gens_i for sn in snapshots}
     l_constraint(network.model, "generator_p_upper", gen_p_upper,
                  list(extendable_gens_i), snapshots)
-
-
 
     ## Define committable generator statuses ##
 
     network.model.generator_status = Var(list(fixed_committable_gens_i), snapshots,
                                          within=Binary)
 
-    var_lower = p_min_pu.loc[:,fixed_committable_gens_i].multiply(network.generators.loc[fixed_committable_gens_i, 'p_nom'])
-    var_upper = p_max_pu.loc[:,fixed_committable_gens_i].multiply(network.generators.loc[fixed_committable_gens_i, 'p_nom'])
-
-
-    committable_gen_p_lower = {(gen,sn) : LConstraint(LExpression([(var_lower[gen][sn],network.model.generator_status[gen,sn]),(-1.,network.model.generator_p[gen,sn])]),"<=") for gen in fixed_committable_gens_i for sn in snapshots}
-
     l_constraint(network.model, "committable_gen_p_lower", committable_gen_p_lower,
                  list(fixed_committable_gens_i), snapshots)
 
 
-    committable_gen_p_upper = {(gen,sn) : LConstraint(LExpression([(var_upper[gen][sn],network.model.generator_status[gen,sn]),(-1.,network.model.generator_p[gen,sn])]),">=") for gen in fixed_committable_gens_i for sn in snapshots}
-
     l_constraint(network.model, "committable_gen_p_upper", committable_gen_p_upper,
                  list(fixed_committable_gens_i), snapshots)
+
 
 
     ## Deal with minimum up time ##
